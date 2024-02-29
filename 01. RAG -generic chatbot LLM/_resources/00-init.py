@@ -18,12 +18,6 @@
 
 # COMMAND ----------
 
-
-dbutils.widgets.text("reset_all_data", "false", "Reset Data")
-reset_all_data = dbutils.widgets.get("reset_all_data") == "true"
-
-# COMMAND ----------
-
 from pyspark.sql.functions import pandas_udf
 import pandas as pd
 import pyspark.sql.functions as F
@@ -63,38 +57,12 @@ def init_experiment_for_batch(demo_name, experiment_name):
 
 # COMMAND ----------
 
-if reset_all_data:
+def reset_data(dbName):
   print(f'clearing up db {dbName}')
   spark.sql(f"DROP DATABASE IF EXISTS `{dbName}` CASCADE")
-
-# COMMAND ----------
-
-def use_and_create_db(catalog, dbName, cloud_storage_path = None):
-  print(f"USE CATALOG `{catalog}`")
-  spark.sql(f"USE CATALOG `{catalog}`")
-  spark.sql(f"""create database if not exists `{dbName}` """)
-
-assert catalog not in ['hive_metastore', 'spark_catalog']
-#If the catalog is defined, we force it to the given value and throw exception if not.
-if len(catalog) > 0:
-  current_catalog = spark.sql("select current_catalog()").collect()[0]['current_catalog()']
-  if current_catalog != catalog:
-    catalogs = [r['catalog'] for r in spark.sql("SHOW CATALOGS").collect()]
-    if catalog not in catalogs:
-      spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
-      if catalog == 'dbdemos':
-        spark.sql(f"ALTER CATALOG {catalog} OWNER TO `account users`")
-  use_and_create_db(catalog, dbName)
-
-if catalog == 'dbdemos':
-  try:
-    spark.sql(f"GRANT CREATE, USAGE on DATABASE {catalog}.{dbName} TO `account users`")
-    spark.sql(f"ALTER SCHEMA {catalog}.{dbName} OWNER TO `account users`")
-  except Exception as e:
-    print("Couldn't grant access to the schema to all users:"+str(e))    
-
-print(f"using catalog.database `{catalog}`.`{dbName}`")
-spark.sql(f"""USE `{catalog}`.`{dbName}`""")    
+  spark.sql(f"create DATABASE if NOT EXISTS `{dbName}`")
+  spark.sql(f"Use schema `{dbName}`")
+  print(f'setting up the db {dbName}')
 
 # COMMAND ----------
 
@@ -444,3 +412,9 @@ def table_exists(table_name):
     except:
         return False
     return True
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC
+# MAGIC Done Running helper functions.
