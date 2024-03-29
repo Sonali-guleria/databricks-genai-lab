@@ -14,7 +14,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../config
+DATABRICKS_SITEMAP_URL = "https://docs.databricks.com/en/doc-sitemap.xml"
 
 # COMMAND ----------
 
@@ -54,15 +54,6 @@ def init_experiment_for_batch(demo_name, experiment_name):
   xp = f"{xp_root_path}/{experiment_name}"
   print(f"Using common experiment under {xp}")
   mlflow.set_experiment(xp)
-
-# COMMAND ----------
-
-def reset_data(dbName):
-  print(f'clearing up db {dbName}')
-  spark.sql(f"DROP DATABASE IF EXISTS `{dbName}` CASCADE")
-  spark.sql(f"create DATABASE if NOT EXISTS `{dbName}`")
-  spark.sql(f"Use schema `{dbName}`")
-  print(f'setting up the db {dbName}')
 
 # COMMAND ----------
 
@@ -245,7 +236,7 @@ def cleanup_demo(catalog, db, serving_endpoint_name, vs_index_fullname):
 # COMMAND ----------
 
 # DBTITLE 1,Demo helper to debug permission issue
-def test_demo_permissions(host, secret_scope, secret_key, vs_endpoint_name, index_name, embedding_endpoint_name = None, managed_embeddings = True):
+def test_demo_permissions(host, secret_scope, secret_key, vs_endpoint_name, index_name, catalog, db, embedding_endpoint_name = None, managed_embeddings = True):
   error = False
   CSS_REPORT = """
   <style>

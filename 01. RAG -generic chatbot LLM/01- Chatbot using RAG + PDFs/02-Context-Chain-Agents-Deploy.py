@@ -1,10 +1,11 @@
 # Databricks notebook source
 # MAGIC %md-sandbox
-# MAGIC # 2/ Advanced chatbot with message history and filter using Langchain
+# MAGIC # 2. Building pipelines to include context and complex reasoning
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-flow-2.png?raw=true" style="float: right; margin-left: 10px"  width="900px;">
 # MAGIC
 # MAGIC Our Vector Search Index is now ready!
+# MAGIC
+# MAGIC **Chaining RAG systems** offers a powerful approach to leveraging different data sources and AI models, enhancing the quality and applicability of generated content in various applications such as customer support automation and medical research assistance.
 # MAGIC
 # MAGIC Let's now create a more advanced langchain model to perform RAG.
 # MAGIC
@@ -20,13 +21,47 @@
 
 # COMMAND ----------
 
+# MAGIC %md-sandbox
+# MAGIC
+# MAGIC ## What are Chain and agents?
+# MAGIC
+# MAGIC * **LLM chains** are formed by connecting one or more large language models in a logical sequence. They integrate an LLM with a prompt, allowing for the execution of operations on text or datasets. Each LLM in the chain may specialize in different aspects of language understanding or generation, and the output of one LLM serves as the input to the next in the chain. 
+# MAGIC
+# MAGIC * **LLM Agents** are tools that enable LLMs to perform various tasks beyond text generation. They act as "tools" for LLMs, allowing them to execute Python code, search for information, query databases, and more. These agents are typically tailored to excel in particular areas of language understanding or generation, such as sentiment analysis, text summarization, question answering, or natural language understanding for specific industries or domains. 
+# MAGIC
+
+# COMMAND ----------
+
 # MAGIC %pip install mlflow==2.9.0 lxml==4.9.3 langchain==0.0.344 databricks-vectorsearch==0.22 cloudpickle==2.2.1 databricks-sdk==0.12.0 cloudpickle==2.2.1 pydantic==2.5.2
 # MAGIC %pip install pip mlflow[databricks]==2.9.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00-init-advanced $reset_all_data=false
+# MAGIC %run ./00-Setup $reset_all_data=false $dbName = demoDB $VECTOR_SEARCH_ENDPOINT_NAME=one-env-shared-endpoint-2 $catalog=sg_lab
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC
+# MAGIC use catalog sg_lab;
+# MAGIC use demoDB;
+
+# COMMAND ----------
+
+VECTOR_SEARCH_ENDPOINT_NAME="one-env-shared-endpoint-2"
+
+catalog = "sg_lab"
+
+dbName = "demoDB"
+
+# COMMAND ----------
+
+import mlflow
+from mlflow.tracking import MlflowClient
+
+experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
+mlflow.set_experiment(experiment_name)
 
 # COMMAND ----------
 
@@ -34,9 +69,13 @@
 # MAGIC ## Exploring Langchain capabilities
 # MAGIC
 # MAGIC Let's start with the basics and send a query to a Databricks Foundation Model using LangChain.
+# MAGIC
+# MAGIC
+# MAGIC
 
 # COMMAND ----------
 
+# DBTITLE 1,Simple
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatDatabricks
 from langchain.schema.output_parser import StrOutputParser
@@ -57,26 +96,12 @@ print(chain.invoke({"question": "What is Spark?"}))
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ## Adding conversation history to the prompt 
-
-# COMMAND ----------
-
-prompt_with_history_str = """
-Your are a Big Data chatbot. Please answer Big Data question only. If you don't know or not related to Big Data, don't answer.
-
-Here is a history between you and a human: {chat_history}
-
-Now, please answer this question: {question}
-"""
-
-prompt_with_history = PromptTemplate(
-  input_variables = ["chat_history", "question"],
-  template = prompt_with_history_str
-)
-
-# COMMAND ----------
-
-# MAGIC %md When invoking our chain, we'll pass history as a list, specifying whether each message was sent by a user or the assistant. For example:
+# MAGIC ## Let's add a filter on top to only answer Databricks-related questions and conversation history to the prompt 
+# MAGIC
+# MAGIC
+# MAGIC **Conversation History:**
+# MAGIC
+# MAGIC When invoking our chain, we'll pass history as a list, specifying whether each message was sent by a user or the assistant. For example:
 # MAGIC
 # MAGIC ```
 # MAGIC [
@@ -87,11 +112,20 @@ prompt_with_history = PromptTemplate(
 # MAGIC ```
 # MAGIC
 # MAGIC Let's create chain components to transform this input into the inputs passed to `prompt_with_history`.
+# MAGIC
+# MAGIC
+# MAGIC **Filter:**
+# MAGIC
+# MAGIC We want our chatbot to be profesionnal and only answer questions related to Databricks. Let's create a small chain and add a first classification step. 
+# MAGIC
+# MAGIC *Note: this is a fairly-naive implementation, another solution could be adding a small classification model based on the question embedding, providing faster classification*
 
 # COMMAND ----------
 
 from langchain.schema.runnable import RunnableLambda
 from operator import itemgetter
+
+
 
 #The question is the last entry of the history
 def extract_question(input):
@@ -101,37 +135,12 @@ def extract_question(input):
 def extract_history(input):
     return input[:-1]
 
-chain_with_history = (
-    {
-        "question": itemgetter("messages") | RunnableLambda(extract_question),
-        "chat_history": itemgetter("messages") | RunnableLambda(extract_history),
-    }
-    | prompt_with_history
-    | chat_model
-    | StrOutputParser()
-)
 
-print(chain_with_history.invoke({
-    "messages": [
-        {"role": "user", "content": "What is Apache Spark?"}, 
-        {"role": "assistant", "content": "Apache Spark is an open-source data processing engine that is widely used in big data analytics."}, 
-        {"role": "user", "content": "Does it support streaming?"}
-    ]
-}))
-
-# COMMAND ----------
-
-# MAGIC %md 
-# MAGIC ## Let's add a filter on top to only answer Databricks-related questions.
-# MAGIC
-# MAGIC We want our chatbot to be profesionnal and only answer questions related to Databricks. Let's create a small chain and add a first classification step. 
-# MAGIC
-# MAGIC *Note: this is a fairly naive implementation, another solution could be adding a small classification model based on the question embedding, providing faster classification*
-
-# COMMAND ----------
 
 chat_model = ChatDatabricks(endpoint="databricks-llama-2-70b-chat", max_tokens = 200)
 
+
+##Filter
 is_question_about_databricks_str = """
 You are classifying documents to know if this question is related with Databricks in AWS, Azure and GCP, Workspaces, Databricks account and cloud infrastructure setup, Data Science, Data Engineering, Big Data, Datawarehousing, SQL, Python and Scala or something from a very different field. Also answer no if the last part is inappropriate. 
 
@@ -148,11 +157,13 @@ Only answer with "yes" or "no".
 Knowing this followup history: {chat_history}, classify this question: {question}
 """
 
+#create prompt with context as filter for databricks chat
 is_question_about_databricks_prompt = PromptTemplate(
   input_variables= ["chat_history", "question"],
   template = is_question_about_databricks_str
 )
 
+#Create chain with prompt
 is_about_databricks_chain = (
     {
         "question": itemgetter("messages") | RunnableLambda(extract_question),
@@ -199,11 +210,42 @@ print(is_about_databricks_chain.invoke({
 
 # COMMAND ----------
 
-index_name=f"{catalog}.{db}.databricks_pdf_documentation_self_managed_vs_index"
+# DBTITLE 1,Grant Service Principal access to your database, index and model
+# from databricks.sdk import WorkspaceClient
+
+# host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+# w = WorkspaceClient(token=dbutils.secrets.get("labs", "rag_sp_token"), host=host)
+# sp_id = w.current_user.me().emails[0].value
+# print(f"Service Principal ID: {sp_id}")
+
+# ##catalog permissions
+# spark.sql(f'GRANT USAGE ON CATALOG {catalog} TO `{sp_id}`')
+
+# # Enable Service Principal (SP) to use the database, select from table and execute model
+# spark.sql(f"GRANT USE SCHEMA ON DATABASE {dbName} TO `{sp_id}`")
+# spark.sql(f"GRANT EXECUTE ON DATABASE {dbName} TO `{sp_id}`")
+# spark.sql(f"GRANT SELECT ON DATABASE {dbName} TO `{sp_id}`")
+# # If we want to enable inference table for the endpoint we have to give SP permission to create a table in db and modify that table.
+# spark.sql(f"GRANT CREATE ON DATABASE {dbName} TO `{sp_id}`")
+# spark.sql(f"GRANT MODIFY ON DATABASE {dbName} TO `{sp_id}`")
+
+# print("permissions set")
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+index_name=f"{catalog}.{dbName}.databricks_pdf_documentation_self_managed_vs_index"
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 
 #Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
-test_demo_permissions(host, secret_scope="dbdemos", secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en", managed_embeddings = False)
+test_demo_permissions(host, secret_scope="dbdemos", secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, catalog = catalog, db = dbName, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en", managed_embeddings = False)
+
+# COMMAND ----------
+
+import os
 
 # COMMAND ----------
 
@@ -211,8 +253,47 @@ from databricks.vector_search.client import VectorSearchClient
 from langchain.vectorstores import DatabricksVectorSearch
 from langchain.embeddings import DatabricksEmbeddings
 from langchain.chains import RetrievalQA
+from langchain.schema.runnable import RunnableLambda
+from operator import itemgetter
 
 os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("dbdemos", "rag_sp_token")
+
+embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
+
+def get_retriever(persist_dir: str = None):
+    os.environ["DATABRICKS_HOST"] = host
+    #Get the vector search index
+    vsc = VectorSearchClient(workspace_url=host, personal_access_token=os.environ["DATABRICKS_TOKEN"])
+    vs_index = vsc.get_index(
+        endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
+        index_name=index_name
+    )
+
+    # Create the retriever
+    vectorstore = DatabricksVectorSearch(
+        vs_index, text_column="content", embedding=embedding_model, columns=["url"]
+    )
+    return vectorstore.as_retriever(search_kwargs={'k': 4})
+
+retriever = get_retriever()
+
+retrieve_document_chain = (
+    itemgetter("messages") 
+    | RunnableLambda(extract_question)
+    | retriever
+)
+print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "What is Apache Spark?"}]}))
+
+# COMMAND ----------
+
+from databricks.vector_search.client import VectorSearchClient
+from langchain.vectorstores import DatabricksVectorSearch
+from langchain.embeddings import DatabricksEmbeddings
+from langchain.chains import RetrievalQA
+from langchain.schema.runnable import RunnableLambda
+from operator import itemgetter
+
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("labs", "rag_sp_token")
 
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
@@ -435,7 +516,7 @@ import langchain
 from mlflow.models import infer_signature
 
 mlflow.set_registry_uri("databricks-uc")
-model_name = f"{catalog}.{db}.dbdemos_advanced_chatbot_model"
+model_name = f"{catalog}.{dbName}.dbdemos_advanced_chatbot_model"
 
 with mlflow.start_run(run_name="dbdemos_chatbot_rag") as run:
     #Get our model signature from input/output
@@ -470,6 +551,73 @@ model.invoke(dialog)
 
 # COMMAND ----------
 
+# MAGIC %md-sandbox
+# MAGIC # Deploying our Chat Model and enabling Online Evaluation Monitoring
+# MAGIC
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-eval-online-2-0.png?raw=true" style="float: right" width="900px">
+# MAGIC
+# MAGIC
+# MAGIC
+# MAGIC Let's now deploy our model as an endpoint to be able to send real-time queries.
+# MAGIC
+# MAGIC Once our model is live, we will need to monitor its behavior to detect potential anomaly and drift over time. 
+# MAGIC
+# MAGIC We won't be able to measure correctness as we don't have a ground truth, but we can track model perplexity and other metrics like profesionalism over time.
+# MAGIC
+# MAGIC This can easily be done by turning on your Model Endpoint Inference table, automatically saving every query input and output as one of your Delta Lake tables.
+
+# COMMAND ----------
+
+import urllib
+import json
+import mlflow
+
+# Create or update serving endpoint
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput
+
+mlflow.set_registry_uri('databricks-uc')
+client = MlflowClient()
+model_name = f"{catalog}.{dbName}.dbdemos_advanced_chatbot_model"
+serving_endpoint_name = f"dbdemos_endpoint_advanced_{catalog}_{dbName}"[:63]
+latest_model_version = get_latest_model_version(model_name)
+
+w = WorkspaceClient()
+
+serving_client = EndpointApiClient()
+# Start the endpoint using the REST API (you can do it using the UI directly)
+auto_capture_config = {
+    "catalog_name": catalog,
+    "schema_name": dbName,
+    "table_name_prefix": serving_endpoint_name
+    }
+environment_vars={"DATABRICKS_TOKEN": "{{secrets/labs/rag_sp_token}}"}
+serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version = latest_model_version, workload_size="Small", scale_to_zero_enabled=True, wait_start = True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
+
+# COMMAND ----------
+
+displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/ml/endpoints/{serving_endpoint_name}">Model Serving Endpoint page</a> for more details.')
+
+# COMMAND ----------
+
+# DBTITLE 1,Let's try to send a query to our chatbot
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import DataframeSplitInput
+
+df_split = DataframeSplitInput(columns=["messages"],
+                               data=[[ {"messages": [{"role": "user", "content": "What is Apache Spark?"}, 
+                                                     {"role": "assistant", "content": "Apache Spark is an open-source data processing engine that is widely used in big data analytics."}, 
+                                                     {"role": "user", "content": "Does it support streaming?"}
+                                                    ]}]])
+w = WorkspaceClient()
+w.serving_endpoints.query(serving_endpoint_name, dataframe_split=df_split)
+
+# COMMAND ----------
+
+display_gradio_app("databricks-demos-chatbot")
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC
 # MAGIC ## Conclusion
@@ -480,8 +628,26 @@ model.invoke(dialog)
 # MAGIC
 # MAGIC Your new prompt might work well for what you tried to fixed, but could also have impact on other questions.
 # MAGIC
-# MAGIC ## Next: Introducing offline model evaluation with MLflow
 # MAGIC
-# MAGIC To solve these issue, we need a repeatable way of testing our model answer as part of our LLMOps deployment!
+# MAGIC ## Next Steps:
+# MAGIC As a self- work, highly recommend you to explore the next notebooks: set up Inferencing and monitoring using Databricks
 # MAGIC
-# MAGIC Open the next [03-Offline-Evaluation]($./03-Offline-Evaluation) notebook to discover how to evaluate your model.
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md-sandbox
+# MAGIC
+# MAGIC ## Online LLM evaluation with Databricks Monitoring
+# MAGIC
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-eval-online-2-2.png?raw=true" style="float: right" width="900px">
+# MAGIC
+# MAGIC Let's now analyze and monitor our model.
+# MAGIC
+# MAGIC
+# MAGIC Here are the required steps:
+# MAGIC
+# MAGIC - Make sure the Inference table is enabled (it was automatically setup in the previous cell)
+# MAGIC - Consume all the Inference table payload, and measure the model answer metrics (perplexity, complexity etc)
+# MAGIC - Save the result in your metric table. This can first be used to plot the metrics over time
+# MAGIC - Leverage Databricks Monitoring to analyze the metric evolution over time

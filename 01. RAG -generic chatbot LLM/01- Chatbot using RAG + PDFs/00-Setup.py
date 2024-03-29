@@ -1,9 +1,11 @@
 # Databricks notebook source
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC # Scaling your business with a GenAI-Powered Assistant
+# MAGIC # Scaling your business with a GenAI
 # MAGIC
 # MAGIC LLMs are disrupting the way we interact with information, from internal knowledge bases to external, customer-facing documentation or support.
+# MAGIC
+# MAGIC One of the most deployed Gen-AI solutions currently is a chatbot. It can be used for several tasks such as answering your questions, retrieving information quickly or even co-piloting.
 # MAGIC  
 # MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/moisaic-logo.png?raw=true" width="100px" style="float: right" />
 # MAGIC
@@ -42,7 +44,8 @@
 # MAGIC
 # MAGIC
 # MAGIC <!-- Collect usage data (view). Remove it to disable collection or disable tracker during installation. View README for more details.  -->
-# MAGIC <img width="1px" src="https://ppxrzfxige.execute-api.us-west-2.amazonaws.com/v1/analytics?category=data-science&org_id=1444828305810485&notebook=00-RAG-chatbot-Introduction&demo_name=chatbot-rag-llm&event=VIEW">
+# MAGIC <img width="1px" src="https://ppxrzfxige.execute-api.us-west-2.amazonaws.com/v1/analytics?category=data-science&org_id=1444828305810485&notebook=%2F01-quickstart%2F00-RAG-chatbot-Introduction&demo_name=llm-rag-chatbot&event=VIEW&path=%2F_dbdemos%2Fdata-science%2Fllm-rag-chatbot%2F01-quickstart%2F00-RAG-chatbot-Introduction&version=1">
+# MAGIC
 
 # COMMAND ----------
 
@@ -91,70 +94,70 @@
 # MAGIC </ul>
 # MAGIC </div>
 # MAGIC <br style="clear: both"> -->
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-managed-flow-0.png?raw=true" style="margin-left: 10px"  width="1100px;">
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-flow-0.png?raw=true" style="margin-left: 10px"  width="1100px;">
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC ## 1/ Ingest data and create your Vector Search index
+# MAGIC What you will learn:
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-data-prep-0.png?raw=true" style="float: right; width: 500px; margin-left: 10px">
+# MAGIC - How to extract information from unstructured documents (pdfs) and create custom chunks
+# MAGIC - Leverage Databricks Embedding Foundation Model to compute the chunks embeddings
+# MAGIC - Create a Self Managed Vector Search index and send queries to find similar documents
+# MAGIC - How to use chains to support complex flow including chat history [using llama 2 input style]
+# MAGIC - Deploy your Model Serving Endpoint with Table Inferences.
 # MAGIC
-# MAGIC The first step is to ingest and prepare the data before we can make use of our Vector Search index.
-# MAGIC
-# MAGIC We'll use the Data Engineering Lakehouse capabilities to ingest our documentation pages, split them into smaller chunks, compute the chunk embeddings and save them as a Delta Lake table.
-# MAGIC
-# MAGIC **What you will learn:**
-# MAGIC - Use langchain and your LLM tokenizer to create chunks from your documents
-# MAGIC - Introduction to Embedding models with Databricks Foundation Models
-# MAGIC - Create a Vector Search Index on top of your data to provide real-time similarity search
+# MAGIC Additional notebooks provided for:
+# MAGIC - Evaluate your model chatbot model correctness with MLflow
+# MAGIC - Run online llm evaluation and track your metrics with Databricks Monitoring
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC Start the data ingestion and create a Vector Search Index: open the [01-Data-Preparation-and-Index]($./01-Data-Preparation-and-Index) notebook.
+# MAGIC %run ../_resources/00-init-advanced 
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
-# MAGIC
-# MAGIC ## 2/ Deploying a RAG chatbot endpoint with databricks-llama-2-70b-chat Foundation Endpoint
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-managed-model-0.png?raw=true" style="float: right; width: 500px; margin-left: 10px">
-# MAGIC
-# MAGIC Our data is ready and our Vector Search Index can answer similarity queries, finding documentation related to our user question.
-# MAGIC
-# MAGIC We can now create a langchain model with an augmented prompt, accessing the LLama2 70B model to answer advanced Databricks questions.
-# MAGIC
-# MAGIC **What you will learn:**
-# MAGIC - Search documents with Databricks Langchain retriever
-# MAGIC - Build a langchain chain with a custom prompt
-# MAGIC - Deploy your chain as a serverless endpoint model and answer customer questions!
+dbutils.widgets.text("reset_all_data", "false", "Reset Data")
+reset_all_data = dbutils.widgets.get("reset_all_data") == "true"
+
+dbutils.widgets.text("dbName", 'rag_chat_lab')
+dbName= dbutils.widgets.get("dbName")
+
+dbutils.widgets.text("VECTOR_SEARCH_ENDPOINT_NAME", "workshop-vs-1")
+
+VECTOR_SEARCH_ENDPOINT_NAME =  dbutils.widgets.get("VECTOR_SEARCH_ENDPOINT_NAME")
+
 
 # COMMAND ----------
 
-# MAGIC  %md
-# MAGIC Build & Deploy your RAG chatbot : open the [02-Deploy-RAG-Chatbot-Model]($./02-Deploy-RAG-Chatbot-Model) notebook.
+dbutils.widgets.text("catalog", 'genai_lab')
+catalog= dbutils.widgets.get("catalog")
+
+
+spark.sql(f"create catalog if not exists {catalog}")
+
+spark.sql("use catalog " +catalog)
+
+
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Conclusion
-# MAGIC
-# MAGIC We've seen how Databricks AI is uniquely positioned to help you solve your GenAI challenge:
-# MAGIC
-# MAGIC - Simplify Data Ingestion and preparation with Databricks Data Engineering capabilities
-# MAGIC - Accelerate Vector Search Index deployment with fully managed indexes
-# MAGIC - Leverages Open models, easy to fine-tune for custom requirements
-# MAGIC - Access a Databricks AI LLama2-70B endpoint
-# MAGIC - Deploy real-time model endpoints to generate answers which leverage your custom data
-# MAGIC
-# MAGIC Interested in deploying your own models? Reach out to your account team!
+print(f"We are using below for this lab: \n catalog: {catalog}\n Schema/Database: {dbName}\n VECTOR SEARCH ENDPOINT NAME: {VECTOR_SEARCH_ENDPOINT_NAME}\n If something is incorrect, please update in the 00-Setup and re-run this command.\n")
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Going further
-# MAGIC
-# MAGIC Want to deep dive into RAG Evaluation, PDF extraction and self-managed Vector Search Index? Open the [01-PDF-Advanced-Data-Preparation]($../02-advanced/01-PDF-Advanced-Data-Preparation) notebook.
+def reset_data(dbName):
+  print(f'clearing up db {dbName}')
+  spark.sql(f"DROP DATABASE IF EXISTS `{dbName}` CASCADE")
+  spark.sql(f"create DATABASE if NOT EXISTS `{dbName}`")
+  spark.sql(f"Use schema `{dbName}`")
+  print(f'setting up the db {dbName}')
+
+# COMMAND ----------
+
+if reset_all_data:
+  print("Resetting the Data and Models.")
+  reset_data(dbName)
+else:
+  print("Not Resetting the Data and Models.")

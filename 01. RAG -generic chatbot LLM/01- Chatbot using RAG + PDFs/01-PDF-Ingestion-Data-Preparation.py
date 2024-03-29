@@ -1,7 +1,7 @@
 # Databricks notebook source
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC # 1/ Ingesting and preparing PDF for LLM and Self-Managed Vector Search Embeddings
+# MAGIC # 1. Ingesting and preparing PDF for LLM and Self-Managed Vector Search Embeddings
 # MAGIC
 # MAGIC ## In this example, we will focus on ingesting pdf documents as source for our retrieval process. 
 # MAGIC
@@ -28,33 +28,14 @@
 
 # COMMAND ----------
 
-# DBTITLE 0,Install required external libraries 
+# DBTITLE 1,Install required external libraries 
 # MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.319 llama-index==0.9.3 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00-init-advanced
-
-# COMMAND ----------
-
-dbutils.widgets.dropdown("Reset Data","True", ["True","False"])
-
-dbutils.widgets.text("Schema", 'your_schema_name')
-dbName= dbutils.widgets.get("Schema")
-
-
-spark.sql("create catalog if not exists sg_labs")
-
-catalog = "sg_labs"
-
-
-spark.sql("use catalog sg_labs");
-
-# COMMAND ----------
-
-if dbutils.widgets.get("Reset Data"):
-  reset_data(dbutils.widgets.get("Schema"))
+# DBTITLE 1,Please update here with your dbName and VECTOR_SEARCH_ENDPOINT_NAME
+# MAGIC %run ./00-Setup $reset_all_data=true $dbName = demoDB $VECTOR_SEARCH_ENDPOINT_NAME=one-env-shared-endpoint-2 $catalog=sg_lab
 
 # COMMAND ----------
 
@@ -64,39 +45,29 @@ if dbutils.widgets.get("Reset Data"):
 
 # COMMAND ----------
 
-#%run ../_resources/00-init-advanced $reset_all_data=false 
+print(f"We are using below for this lab: \n catalog: {catalog}\n Schema/Database: {dbName}\n VECTOR SEARCH ENDPOINT NAME: {VECTOR_SEARCH_ENDPOINT_NAME}\n If something is incorrect, please update in the 00. Setup and re-run this command.\n")
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ## Ingesting Databricks ebook PDFs and extracting their pages
+# MAGIC ## Ingestion Flow
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-pdf-self-managed-1.png?raw=true" style="float: right" width="500px">
-# MAGIC
-# MAGIC First, let's ingest our PDFs as a Delta Lake table with path urls and content in binary format. 
-# MAGIC
-# MAGIC We'll use [Databricks Autoloader](https://docs.databricks.com/en/ingestion/auto-loader/index.html) to incrementally ingeset new files, making it easy to incrementally consume billions of files from the data lake in various data formats. Autoloader easily ingests our unstructured PDF data in binary format.
-# MAGIC
-
-# COMMAND ----------
-
-# MAGIC %md
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-pdf-self-managed-1.png?raw=true" style="float: right" width="650">
 # MAGIC
 # MAGIC
-# MAGIC ### Ingestion Guidelines
-# MAGIC
-# MAGIC
-# MAGIC The Data preparation for PDFs usually includes below steps:
+# MAGIC The Data Preparation for PDFs usually includes the steps below, and we are going to follow a similar flow.
 # MAGIC <br>
 # MAGIC </br>
-# MAGIC * OCR the images to text
+# MAGIC * Ingest the PDFs as a Delta Lake table with the provided path urls. We'll use [Databricks Autoloader](https://docs.databricks.com/en/ingestion/auto-loader/index.html) to incrementally ingest new files, autoloader easily ingests our unstructured PDF data in binary format.
+# MAGIC * OCR the images to text [***Note**: Your cluster will need a few extra libraries that you would typically install with a cluster init script.*]
 # MAGIC * Extract text for each PDF file
 # MAGIC * Use libraries to clean the text. This would include removing headers, footers, or any information that you do not want to consider.
 # MAGIC * UDF functions can be used to scale the ingestion process. Using those, you can execute the ingestion + transformation in parallel instead of doing everything serially.
+# MAGIC
 
 # COMMAND ----------
 
-# DBTITLE 1,Our pdf or docx files are available in our Volume (or DBFS)
+# DBTITLE 1,Use Volumes to store non-tabular data and govern Access 
 spark.sql("CREATE VOLUME IF NOT EXISTS volume_databricks_documentation")
 # List our raw PDF docs
 volume_folder =  f"/Volumes/{catalog}/{dbName}/volume_databricks_documentation"
@@ -111,6 +82,7 @@ display(dbutils.fs.ls(volume_folder+"/databricks-pdf"))
 # COMMAND ----------
 
 # DBTITLE 1,Ingesting PDF files as binary format using Databricks cloudFiles (Autoloader)
+# Reading the PDF files in an incremental fashion
 df = (
     spark.readStream.format("cloudFiles")
     .option("cloudFiles.format", "BINARYFILE")
@@ -128,37 +100,42 @@ df = (
 
 # COMMAND ----------
 
+# DBTITLE 1,Quick glance at the data; look at the column content 
 # MAGIC %sql SELECT * FROM pdf_raw LIMIT 2
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-pdf-self-managed-2.png?raw=true" style="float: right" width="500px">
-# MAGIC
-# MAGIC ## Extracting our PDF content as text chunks
-# MAGIC
-# MAGIC We need to convert the PDF documents bytes to text, and extract chunks from their content.
-# MAGIC
-# MAGIC This part can be tricky as PDFs are hard to work with and can be saved as images, for which we'll need an OCR to extract the text.
-# MAGIC
-# MAGIC Using the `Unstructured` library within a Spark UDF makes it easy to extract text. 
-# MAGIC
-# MAGIC *Note: Your cluster will need a few extra libraries that you would typically install with a cluster init script.*
 # MAGIC
 # MAGIC
+# MAGIC ## Chunking?
 # MAGIC
-
-# COMMAND ----------
-
-# MAGIC %md-sandbox
-# MAGIC
-# MAGIC
-# MAGIC ### Splitting documents into small chunks
+# MAGIC **Why?** 
 # MAGIC
 # MAGIC LLM models typically have a maximum input context length, and you won't be able to compute embeddings for very long texts.
 # MAGIC In addition, the longer your context length is, the longer it will take for the model to provide a response.
 # MAGIC
-# MAGIC Document preparation is key for your model to perform well, and multiple strategies exist depending on your dataset:
+# MAGIC
+# MAGIC For determining the chunking strategy, start with:
+# MAGIC
+# MAGIC *  How relevant is the context to the prompt?
+# MAGIC * How much context/chunks can I fit within the model’s token limit?
+# MAGIC * User behavior? Are they going to ask long queries?
+# MAGIC * Do I need to pass this output to the next LLM? 
+# MAGIC
+# MAGIC **How?**
+# MAGIC * 1:1
+# MAGIC * 1:N
+# MAGIC * many more
+# MAGIC     - Sentence Segmentation: Breaking long paragraphs or documents into individual sentences.
+# MAGIC     - Paragraph Segmentation: Breaking longer texts into smaller paragraphs or sections.
+# MAGIC     - Tokenization: Breaking text into individual tokens or words.
+# MAGIC     - Topic Modeling: Identifying key topics or themes within a large text and segmenting based on these themes.
+# MAGIC     - Attention Mechanisms: Focusing attention on relevant parts of the input text while processing.
+# MAGIC
+# MAGIC
+# MAGIC
+# MAGIC *Document preparation is key for your model to perform well, and multiple strategies exist depending on your dataset:*
 # MAGIC
 # MAGIC - Split document into small chunks (paragraph, h2...)
 # MAGIC - Truncate documents to a fixed length
@@ -168,7 +145,7 @@ df = (
 # MAGIC
 # MAGIC
 # MAGIC
-# MAGIC ## ***ADD MORE STRATEGIES***
+# MAGIC
 
 # COMMAND ----------
 
@@ -241,6 +218,7 @@ with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main
 
 # COMMAND ----------
 
+# DBTITLE 1,Let's Scale!
 # MAGIC %md
 # MAGIC This looks great. We'll now wrap it with a text_splitter to avoid having too big pages, and create a Pandas UDF function to easily scale that across multiple nodes.
 # MAGIC
@@ -323,10 +301,19 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 
 # COMMAND ----------
 
+# DBTITLE 1,Important!
 # MAGIC %md
 # MAGIC
 # MAGIC Please note that the steps below for using embedding endpoint is only required if you want to compute and manage your own embeddings and you will use *self-managed embeddings* while creating vector indexes on Databricks. 
 # MAGIC
+
+# COMMAND ----------
+
+import mlflow
+from mlflow.tracking import MlflowClient
+
+experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
+mlflow.set_experiment(experiment_name)
 
 # COMMAND ----------
 
@@ -430,7 +417,7 @@ if table_exists(f'{catalog}.{dbName}.databricks_documentation'):
 # MAGIC
 # MAGIC
 # MAGIC
-# MAGIC For this workshop, we have already created Vector Search endpoints for you to use. **Please ensure** you are choosing one of the *vector indexe endpoint from the list provided by the instructor.*
+# MAGIC For this workshop, we have already created Vector Search endpoints for you to use. **Please ensure** you are choosing one of the *vector index endpoint from the list provided by the instructor.*
 # MAGIC
 # MAGIC
 # MAGIC There are several ways to create a vector Search endpoint. 
@@ -440,12 +427,6 @@ if table_exists(f'{catalog}.{dbName}.databricks_documentation'):
 # MAGIC * REST API [AWS](https://docs.databricks.com/en/generative-ai/create-query-vector-search.html#create-a-vector-search-endpoint-using-the-rest-api)| [Azure](https://learn.microsoft.com/en-us/azure/databricks/generative-ai/create-query-vector-search#create-a-vector-search-endpoint-using-the-rest-api)
 # MAGIC
 # MAGIC
-
-# COMMAND ----------
-
-dbutils.widgets.text("VECTOR SEARCH ENDPOINT NAME", "Please input here...")
-
-VECTOR_SEARCH_ENDPOINT_NAME =  dbutils.widgets.get("VECTOR SEARCH ENDPOINT NAME")
 
 # COMMAND ----------
 
@@ -487,6 +468,14 @@ wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
 # COMMAND ----------
 
+# MAGIC %md-sandbox
+# MAGIC
+# MAGIC ### Catalog exploration for Indexes
+# MAGIC
+# MAGIC Navigate to your catalog and see if the indexes are ready! 
+
+# COMMAND ----------
+
 # MAGIC %md 
 # MAGIC ## Searching for similar content
 # MAGIC
@@ -497,13 +486,6 @@ wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 # MAGIC Let's give it a try and search for similar content.
 # MAGIC
 # MAGIC *Note: `similarity_search` also supports a filters parameter. This is useful to add a security layer to your RAG system: you can filter out some sensitive content based on who is doing the call (for example filter on a specific department based on the user preference).*
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC
-# MAGIC use catalog sg_labs;
-# MAGIC SHOW TABLES IN ${Schema}
 
 # COMMAND ----------
 
@@ -528,4 +510,4 @@ pprint(docs)
 # MAGIC
 # MAGIC This simplifies and accelerates your data projects so that you can focus on the next step: creating your realtime chatbot endpoint with well-crafted prompt augmentation.
 # MAGIC
-# MAGIC Open the [02-Advanced-Chatbot-Chain]($./02-Advanced-Chatbot-Chain) notebook to create and deploy a chatbot endpoint.
+# MAGIC Open the [02-Context-Chain-Agents]($./02-Context-Chain-Agents) notebook to create and deploy a chatbot endpoint.
