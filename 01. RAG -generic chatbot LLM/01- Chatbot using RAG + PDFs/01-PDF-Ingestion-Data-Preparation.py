@@ -309,11 +309,19 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 
 # COMMAND ----------
 
-import mlflow
-from mlflow.tracking import MlflowClient
+# MAGIC %md
+# MAGIC # Ogden mod
+# MAGIC > ## commented this out to avoid error
+# MAGIC > ## this hard-coded location for experiment_name does not exist in lab workspace
+# MAGIC > # Question for Sonali:  was the expectation for participants to edit this?
 
-experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
-mlflow.set_experiment(experiment_name)
+# COMMAND ----------
+
+# import mlflow
+# from mlflow.tracking import MlflowClient
+
+# experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
+# mlflow.set_experiment(experiment_name)
 
 # COMMAND ----------
 
@@ -427,6 +435,12 @@ if table_exists(f'{catalog}.{dbName}.databricks_documentation'):
 # MAGIC * REST API [AWS](https://docs.databricks.com/en/generative-ai/create-query-vector-search.html#create-a-vector-search-endpoint-using-the-rest-api)| [Azure](https://learn.microsoft.com/en-us/azure/databricks/generative-ai/create-query-vector-search#create-a-vector-search-endpoint-using-the-rest-api)
 # MAGIC
 # MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Ogden mod
+# MAGIC > ## manually created the "one-env-shared-endpoint-2" endpoint via the Compute UI
 
 # COMMAND ----------
 

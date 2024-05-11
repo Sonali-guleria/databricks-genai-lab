@@ -57,11 +57,19 @@ dbName = "demoDB"
 
 # COMMAND ----------
 
-import mlflow
-from mlflow.tracking import MlflowClient
+# MAGIC %md
+# MAGIC # Ogden mod
+# MAGIC > ## commented this out to avoid error (same as in the 1st notebook)
+# MAGIC > ## this hard-coded location for experiment_name does not exist in lab workspace
+# MAGIC > # Question for Sonali:  was the expectation for participants to edit this?
 
-experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
-mlflow.set_experiment(experiment_name)
+# COMMAND ----------
+
+# import mlflow
+# from mlflow.tracking import MlflowClient
+
+# experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
+# mlflow.set_experiment(experiment_name)
 
 # COMMAND ----------
 
@@ -233,7 +241,10 @@ print(is_about_databricks_chain.invoke({
 
 # COMMAND ----------
 
-
+# MAGIC %md
+# MAGIC # Ogden mod
+# MAGIC > ## had to use Databricks CLI to add secret scope to lab workspace
+# MAGIC > # Question for Sonali:  do we need to grant access to this scope to all participants?
 
 # COMMAND ----------
 
@@ -286,6 +297,12 @@ print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # Ogden mod
+# MAGIC > ## had to change name of secret scope from "labs" to "dbdemos"
+
+# COMMAND ----------
+
 from databricks.vector_search.client import VectorSearchClient
 from langchain.vectorstores import DatabricksVectorSearch
 from langchain.embeddings import DatabricksEmbeddings
@@ -293,7 +310,8 @@ from langchain.chains import RetrievalQA
 from langchain.schema.runnable import RunnableLambda
 from operator import itemgetter
 
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("labs", "rag_sp_token")
+#os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("labs", "rag_sp_token")
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("dbdemos", "rag_sp_token")
 
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
@@ -568,6 +586,12 @@ model.invoke(dialog)
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # Ogden mod
+# MAGIC > ## had to change secret scope reference to "dbdemos"
+
+# COMMAND ----------
+
 import urllib
 import json
 import mlflow
@@ -591,7 +615,8 @@ auto_capture_config = {
     "schema_name": dbName,
     "table_name_prefix": serving_endpoint_name
     }
-environment_vars={"DATABRICKS_TOKEN": "{{secrets/labs/rag_sp_token}}"}
+#environment_vars={"DATABRICKS_TOKEN": "{{secrets/labs/rag_sp_token}}"}
+environment_vars={"DATABRICKS_TOKEN": "{{secrets/dbdemos/rag_sp_token}}"}
 serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version = latest_model_version, workload_size="Small", scale_to_zero_enabled=True, wait_start = True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
 
 # COMMAND ----------
