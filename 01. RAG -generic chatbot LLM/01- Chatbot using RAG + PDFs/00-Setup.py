@@ -128,6 +128,10 @@ dbutils.widgets.text("VECTOR_SEARCH_ENDPOINT_NAME", "workshop-vs-1")
 
 VECTOR_SEARCH_ENDPOINT_NAME =  dbutils.widgets.get("VECTOR_SEARCH_ENDPOINT_NAME")
 
+dbutils.widgets.text("dataset","Finance-SecFiles")
+
+
+dataset = dbutils.widgets.get("dataset")
 
 # COMMAND ----------
 
@@ -139,11 +143,9 @@ spark.sql(f"create catalog if not exists {catalog}")
 
 spark.sql("use catalog " +catalog)
 
+spark.sql(f"create DATABASE if NOT EXISTS `{dbName}`")
 
-
-# COMMAND ----------
-
-print(f"We are using below for this lab: \n catalog: {catalog}\n Schema/Database: {dbName}\n VECTOR SEARCH ENDPOINT NAME: {VECTOR_SEARCH_ENDPOINT_NAME}\n If something is incorrect, please update in the 00-Setup and re-run this command.\n")
+spark.sql("use " +dbName)
 
 # COMMAND ----------
 

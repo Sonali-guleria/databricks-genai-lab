@@ -55,11 +55,11 @@ def download_file_from_git(dest, owner, repo, path):
 
 # COMMAND ----------
 
-def upload_pdfs_to_volume(volume_path):
-  download_file_from_git(volume_path, "databricks-demos", "dbdemos-dataset", "/llm/databricks-pdf-documentation")
-
-def upload_dataset_to_volume(volume_path):
-  download_file_from_git(volume_path, "databricks-demos", "dbdemos-dataset", "/llm/databricks-documentation")
+def upload_pdfs_to_volume(volume_path,dataset):
+  if dataset=="Databricks-Documentation":
+    download_file_from_git(volume_path, "databricks-demos", "dbdemos-dataset", "/llm/databricks-pdf-documentation")
+  elif dataset=="Finance-SecFilings":
+    download_file_from_git(volume_path, "ogdendc", "workshop_genai_data", "/SEC_pdfs/TY2023")
 
 # COMMAND ----------
 

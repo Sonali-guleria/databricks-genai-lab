@@ -9,7 +9,10 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.9.0 lxml==4.9.3 transformers==4.30.2 langchain==0.0.344 databricks-vectorsearch==0.22
+# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 transformers==4.30.2 langchain==0.1.5 databricks-vectorsearch==0.22
+# MAGIC %pip install "unstructured[pdf,docx]==0.10.30" llama-index==0.9.3 cloudpickle==2.2.1 databricks-sdk==0.12.0 cloudpickle==2.2.1 pydantic==2.5.2
+# MAGIC %pip install mlflow-skinny[databricks] mlflow[databricks]
+# MAGIC %pip install --upgrade --force-reinstall databricks-vectorsearch
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -39,21 +42,21 @@ assert float(current_version) >= float(min_required_version), f'The Databricks v
 
 # COMMAND ----------
 
-#dbdemos__delete_this_cell
-#force the experiment to the field demos one. Required to launch as a batch
-def init_experiment_for_batch(demo_name, experiment_name):
-  #You can programatically get a PAT token with the following
-  from databricks.sdk import WorkspaceClient
-  w = WorkspaceClient()
-  xp_root_path = f"/Shared/dbdemos/experiments/{demo_name}"
-  try:
-    r = w.workspace.mkdirs(path=xp_root_path)
-  except Exception as e:
-    print(f"ERROR: couldn't create a folder for the experiment under {xp_root_path} - please create the folder manually or  skip this init (used for job only: {e})")
-    raise e
-  xp = f"{xp_root_path}/{experiment_name}"
-  print(f"Using common experiment under {xp}")
-  mlflow.set_experiment(xp)
+# #dbdemos__delete_this_cell
+# #force the experiment to the field demos one. Required to launch as a batch
+# def init_experiment_for_batch(demo_name, experiment_name):
+#   #You can programatically get a PAT token with the following
+#   from databricks.sdk import WorkspaceClient
+#   w = WorkspaceClient()
+#   xp_root_path = f"/Shared/dbdemos/experiments/{demo_name}"
+#   try:
+#     r = w.workspace.mkdirs(path=xp_root_path)
+#   except Exception as e:
+#     print(f"ERROR: couldn't create a folder for the experiment under {xp_root_path} - please create the folder manually or  skip this init (used for job only: {e})")
+#     raise e
+#   xp = f"{xp_root_path}/{experiment_name}"
+#   print(f"Using common experiment under {xp}")
+#   mlflow.set_experiment(xp)
 
 # COMMAND ----------
 

@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md-sandbox
-# MAGIC # 2. Building pipelines to include context and complex reasoning
+# MAGIC # 2. Building pipelines to include context, history and reading from the Vector Database
 # MAGIC
 # MAGIC
 # MAGIC Our Vector Search Index is now ready!
@@ -21,6 +21,14 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC
+# MAGIC ## !! STOP !! Read before proceeding
+# MAGIC
+# MAGIC Please run the [**01. PDF Ingestion Data Preparation**]($./01. PDF Ingestion Data Preparation) before running this notebook. Ensure that you are using the same `Catalog`, `Database Name`, `Vector Search Endpoint Name` as Notebook 01. The variables Dataset (`Databricks-Documentation`) and Reset Data (`False`) have been preset already and should not be changed. They are still provided to maintain consistency across the notebooks. 
+
+# COMMAND ----------
+
 # MAGIC %md-sandbox
 # MAGIC
 # MAGIC ## What are Chain and agents?
@@ -32,36 +40,50 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.9.0 lxml==4.9.3 langchain==0.0.344 databricks-vectorsearch==0.22 cloudpickle==2.2.1 databricks-sdk==0.12.0 cloudpickle==2.2.1 pydantic==2.5.2
-# MAGIC %pip install pip mlflow[databricks]==2.9.0
-# MAGIC dbutils.library.restartPython()
+# Import required libraries
+from pyspark.sql.functions import col
+from pyspark.sql.types import BooleanType
+from pyspark.sql.functions import lit
+
+# Remove all widgets
+dbutils.widgets.removeAll()
+
+# Create the widgets
+dbutils.widgets.text("dbName", "", "Database Name")
+dbutils.widgets.text("VECTOR_SEARCH_ENDPOINT_NAME", "", "Vector Search Endpoint Name")
+dbutils.widgets.text("catalog", "", "Catalog")
+# please note- This notebook will not work as expected if you have reset the data, so there is no True option here
+dbutils.widgets.dropdown("reset_all_data", "false", ["false"], "Reset Data")
+dbutils.widgets.dropdown("dataset", "Databricks-Documentation", ["Databricks-Documentation"],"Dataset")
+
+# Get the widget values
+dbName = dbutils.widgets.get("dbName")
+VECTOR_SEARCH_ENDPOINT_NAME = dbutils.widgets.get("VECTOR_SEARCH_ENDPOINT_NAME")
+catalog = dbutils.widgets.get("catalog")
+reset_all_data = dbutils.widgets.get("reset_all_data")
+dataset = dbutils.widgets.get("dataset")
+
+
+# Convert reset_all_data to boolean
+reset_all_data = True if reset_all_data.lower() == "true" else False
+
+# Print the widget values for verification
+print(f"dbName: {dbName}")
+print(f"VECTOR_SEARCH_ENDPOINT_NAME: {VECTOR_SEARCH_ENDPOINT_NAME}")
+print(f"catalog: {catalog}")
+print(f"reset_all_data: {reset_all_data}")
+print(f"Dataset is: {dataset}")
+print("\n Please fill any missing or Incorrect Values....")
 
 # COMMAND ----------
 
-# MAGIC %run ./00-Setup $reset_all_data=false $dbName = demoDB $VECTOR_SEARCH_ENDPOINT_NAME=one-env-shared-endpoint-2 $catalog=sg_lab
+# MAGIC %run ./00-Setup $reset_all_data=$reset_all_data $dbName=$dbName $catalog=$catalog $dataset=$dataset $VECTOR_SEARCH_ENDPOINT_NAME=$VECTOR_SEARCH_ENDPOINT_NAME 
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC
-# MAGIC use catalog sg_lab;
-# MAGIC use demoDB;
-
-# COMMAND ----------
-
-VECTOR_SEARCH_ENDPOINT_NAME="one-env-shared-endpoint-2"
-
-catalog = "sg_lab"
-
-dbName = "demoDB"
-
-# COMMAND ----------
-
-import mlflow
-from mlflow.tracking import MlflowClient
-
-experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
-mlflow.set_experiment(experiment_name)
+# MAGIC select current_catalog(), current_database();
 
 # COMMAND ----------
 
@@ -77,21 +99,21 @@ mlflow.set_experiment(experiment_name)
 
 # DBTITLE 1,Simple
 from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatDatabricks
+from langchain_community.chat_models import ChatDatabricks
 from langchain.schema.output_parser import StrOutputParser
 
 prompt = PromptTemplate(
   input_variables = ["question"],
-  template = "You are an assistant. Give a short answer to this question: {question}"
+  template = "You are an assistant. Do not attempt to answer if you do not know. Give a short answer to this question: {question}"
 )
-chat_model = ChatDatabricks(endpoint="databricks-llama-2-70b-chat", max_tokens = 500)
+chat_model = ChatDatabricks(endpoint="databricks-dbrx-instruct", max_tokens = 500)
 
 chain = (
   prompt
   | chat_model
   | StrOutputParser()
 )
-print(chain.invoke({"question": "What is Spark?"}))
+print(chain.invoke({"question": "What are LLMs?"}))
 
 # COMMAND ----------
 
@@ -135,9 +157,6 @@ def extract_question(input):
 def extract_history(input):
     return input[:-1]
 
-
-
-chat_model = ChatDatabricks(endpoint="databricks-llama-2-70b-chat", max_tokens = 200)
 
 
 ##Filter
@@ -211,41 +230,34 @@ print(is_about_databricks_chain.invoke({
 # COMMAND ----------
 
 # DBTITLE 1,Grant Service Principal access to your database, index and model
-# from databricks.sdk import WorkspaceClient
+from databricks.sdk import WorkspaceClient
 
-# host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
-# w = WorkspaceClient(token=dbutils.secrets.get("labs", "rag_sp_token"), host=host)
-# sp_id = w.current_user.me().emails[0].value
-# print(f"Service Principal ID: {sp_id}")
+host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+w = WorkspaceClient(token=dbutils.secrets.get("labs", "sp_token"), host=host)
+sp_id = w.current_user.me().emails[0].value
+print(f"Service Principal ID: {sp_id}")
 
-# ##catalog permissions
-# spark.sql(f'GRANT USAGE ON CATALOG {catalog} TO `{sp_id}`')
+##catalog permissions
+spark.sql(f'GRANT USAGE ON CATALOG {catalog} TO `{sp_id}`')
 
-# # Enable Service Principal (SP) to use the database, select from table and execute model
-# spark.sql(f"GRANT USE SCHEMA ON DATABASE {dbName} TO `{sp_id}`")
-# spark.sql(f"GRANT EXECUTE ON DATABASE {dbName} TO `{sp_id}`")
-# spark.sql(f"GRANT SELECT ON DATABASE {dbName} TO `{sp_id}`")
-# # If we want to enable inference table for the endpoint we have to give SP permission to create a table in db and modify that table.
-# spark.sql(f"GRANT CREATE ON DATABASE {dbName} TO `{sp_id}`")
-# spark.sql(f"GRANT MODIFY ON DATABASE {dbName} TO `{sp_id}`")
+# Enable Service Principal (SP) to use the database, select from table and execute model
+spark.sql(f"GRANT USE SCHEMA ON DATABASE {dbName} TO `{sp_id}`")
+spark.sql(f"GRANT EXECUTE ON DATABASE {dbName} TO `{sp_id}`")
+spark.sql(f"GRANT SELECT ON DATABASE {dbName} TO `{sp_id}`")
+# If we want to enable inference table for the endpoint we have to give SP permission to create a table in db and modify that table.
+spark.sql(f"GRANT CREATE ON DATABASE {dbName} TO `{sp_id}`")
+spark.sql(f"GRANT MODIFY ON DATABASE {dbName} TO `{sp_id}`")
 
-# print("permissions set")
-
-# COMMAND ----------
-
-
+print("permissions set")
 
 # COMMAND ----------
 
-index_name=f"{catalog}.{dbName}.databricks_pdf_documentation_self_managed_vs_index"
+index_name=f"{catalog}.{dbName}.databricks_documentation_managed_vs_index"
+
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 
-#Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
-test_demo_permissions(host, secret_scope="dbdemos", secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, catalog = catalog, db = dbName, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en", managed_embeddings = False)
-
-# COMMAND ----------
-
-import os
+# #Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
+# test_demo_permissions(host, secret_scope="dbdemos", secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, catalog = catalog, db = dbName, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en", managed_embeddings = False)
 
 # COMMAND ----------
 
@@ -255,8 +267,9 @@ from langchain.embeddings import DatabricksEmbeddings
 from langchain.chains import RetrievalQA
 from langchain.schema.runnable import RunnableLambda
 from operator import itemgetter
+import os
 
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("dbdemos", "rag_sp_token")
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("labs", "token")
 
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
@@ -271,7 +284,7 @@ def get_retriever(persist_dir: str = None):
 
     # Create the retriever
     vectorstore = DatabricksVectorSearch(
-        vs_index, text_column="content", embedding=embedding_model, columns=["url"]
+        vs_index, text_column="content_chunk", embedding=embedding_model, columns=["path"]
     )
     return vectorstore.as_retriever(search_kwargs={'k': 4})
 
@@ -293,7 +306,7 @@ from langchain.chains import RetrievalQA
 from langchain.schema.runnable import RunnableLambda
 from operator import itemgetter
 
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("labs", "rag_sp_token")
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("labs", "sp_token")
 
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
@@ -308,7 +321,7 @@ def get_retriever(persist_dir: str = None):
 
     # Create the retriever
     vectorstore = DatabricksVectorSearch(
-        vs_index, text_column="content", embedding=embedding_model, columns=["url"]
+        vs_index, text_column="content_chunk", embedding=embedding_model, columns=["path"]
     )
     return vectorstore.as_retriever(search_kwargs={'k': 4})
 
@@ -417,7 +430,7 @@ def format_context(docs):
     return "\n\n".join([d.page_content for d in docs])
 
 def extract_source_urls(docs):
-    return [d.metadata["url"] for d in docs]
+    return [d.metadata["path"] for d in docs]
 
 relevant_question_chain = (
   RunnablePassthrough() |
@@ -505,18 +518,12 @@ display_chat(dialog["messages"], response)
 
 # COMMAND ----------
 
-#dbdemos__delete_this_cell
-#force the experiment to the field demos one. Required to launch as a batch
-init_experiment_for_batch("chatbot-rag-llm-advanced", "simple")
-
-# COMMAND ----------
-
 import cloudpickle
 import langchain
 from mlflow.models import infer_signature
 
 mlflow.set_registry_uri("databricks-uc")
-model_name = f"{catalog}.{dbName}.dbdemos_advanced_chatbot_model"
+model_name = f"{catalog}.{dbName}.GenAI_workshop_databricks_doc"
 
 with mlflow.start_run(run_name="dbdemos_chatbot_rag") as run:
     #Get our model signature from input/output
@@ -578,8 +585,8 @@ from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelI
 
 mlflow.set_registry_uri('databricks-uc')
 client = MlflowClient()
-model_name = f"{catalog}.{dbName}.dbdemos_advanced_chatbot_model"
-serving_endpoint_name = f"dbdemos_endpoint_advanced_{catalog}_{dbName}"[:63]
+model_name = f"{catalog}.{dbName}.GenAI_workshop_databricks_doc"
+serving_endpoint_name = f"gen_ai_ws_{catalog}_{dbName}"[:63]
 latest_model_version = get_latest_model_version(model_name)
 
 w = WorkspaceClient()
@@ -591,7 +598,7 @@ auto_capture_config = {
     "schema_name": dbName,
     "table_name_prefix": serving_endpoint_name
     }
-environment_vars={"DATABRICKS_TOKEN": "{{secrets/labs/rag_sp_token}}"}
+environment_vars={"DATABRICKS_TOKEN": "{{secrets/labs/sp_token}}"}
 serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version = latest_model_version, workload_size="Small", scale_to_zero_enabled=True, wait_start = True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
 
 # COMMAND ----------

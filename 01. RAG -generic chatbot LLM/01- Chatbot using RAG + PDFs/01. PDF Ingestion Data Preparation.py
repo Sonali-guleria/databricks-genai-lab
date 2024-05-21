@@ -3,14 +3,15 @@
 # MAGIC
 # MAGIC # 1. Ingesting and preparing PDF for LLM and Self-Managed Vector Search Embeddings
 # MAGIC
-# MAGIC ## In this example, we will focus on ingesting pdf documents as source for our retrieval process. 
+# MAGIC ## In this example, we will focus on ingesting PDF documents as a source for our retrieval process. 
 # MAGIC
 # MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-pdf-self-managed-0.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
 # MAGIC
 # MAGIC
-# MAGIC For this example, we will add Databricks ebook PDFs from [Databricks resources page](https://www.databricks.com/resources) to our knowledge database.
+# MAGIC There are two datasets that we can use for the workshop:
 # MAGIC
-# MAGIC **Note: This demo is advanced content, we strongly recommend going over the simple version first to learn the basics. You can find the introductory version [here](https://notebooks.databricks.com/demos/llm-rag-chatbot/index.html#).**
+# MAGIC * Databricks ebook PDFs from [Databricks resources page](https://www.databricks.com/resources) to our knowledge database.
+# MAGIC * SEC filings 
 # MAGIC
 # MAGIC Here are all the detailed steps:
 # MAGIC
@@ -28,14 +29,44 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,Install required external libraries 
-# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.319 llama-index==0.9.3 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0
-# MAGIC dbutils.library.restartPython()
+# Import required libraries
+from pyspark.sql.functions import col
+from pyspark.sql.types import BooleanType
+from pyspark.sql.functions import lit
+
+# Remove all widgets
+dbutils.widgets.removeAll()
+
+# Create the widgets
+dbutils.widgets.text("dbName", "", "Database Name")
+dbutils.widgets.text("VECTOR_SEARCH_ENDPOINT_NAME", "", "Vector Search Endpoint Name")
+dbutils.widgets.text("catalog", "", "Catalog")
+dbutils.widgets.dropdown("reset_all_data", "true", ["false", "true"], "Reset Data")
+dbutils.widgets.dropdown("dataset", "Finance-SecFilings", ["Finance-SecFilings", "Databricks-Documentation"],"Dataset")
+
+# Get the widget values
+dbName = dbutils.widgets.get("dbName")
+VECTOR_SEARCH_ENDPOINT_NAME = dbutils.widgets.get("VECTOR_SEARCH_ENDPOINT_NAME")
+catalog = dbutils.widgets.get("catalog")
+reset_all_data = dbutils.widgets.get("reset_all_data")
+dataset = dbutils.widgets.get("dataset")
+
+
+# Convert reset_all_data to boolean
+reset_all_data = True if reset_all_data.lower() == "true" else False
+
+# Print the widget values for verification
+print(f"dbName: {dbName}")
+print(f"VECTOR_SEARCH_ENDPOINT_NAME: {VECTOR_SEARCH_ENDPOINT_NAME}")
+print(f"catalog: {catalog}")
+print(f"reset_all_data: {reset_all_data}")
+print(f"Dataset is: {dataset}")
+print("\n Please fill any missing or Incorrect Values....")
 
 # COMMAND ----------
 
-# DBTITLE 1,Please update here with your dbName and VECTOR_SEARCH_ENDPOINT_NAME
-# MAGIC %run ./00-Setup $reset_all_data=true $dbName = demoDB $VECTOR_SEARCH_ENDPOINT_NAME=one-env-shared-endpoint-2 $catalog=sg_lab
+# DBTITLE 1,Running the Setup
+# MAGIC %run ./00-Setup $reset_all_data=$reset_all_data $dbName=$dbName $catalog=$catalog $dataset=$dataset $VECTOR_SEARCH_ENDPOINT_NAME=$VECTOR_SEARCH_ENDPOINT_NAME 
 
 # COMMAND ----------
 
@@ -45,7 +76,7 @@
 
 # COMMAND ----------
 
-print(f"We are using below for this lab: \n catalog: {catalog}\n Schema/Database: {dbName}\n VECTOR SEARCH ENDPOINT NAME: {VECTOR_SEARCH_ENDPOINT_NAME}\n If something is incorrect, please update in the 00. Setup and re-run this command.\n")
+print(f"We are using below for this lab: \n catalog: {catalog}\n Schema/Database: {dbName}\n VECTOR SEARCH ENDPOINT NAME: {VECTOR_SEARCH_ENDPOINT_NAME}\n The Dataset is: {dataset} \n\n If something is incorrect, please update in the 00. Setup and re-run this command.\n")
 
 # COMMAND ----------
 
@@ -67,41 +98,68 @@ print(f"We are using below for this lab: \n catalog: {catalog}\n Schema/Database
 
 # COMMAND ----------
 
+if "Fin" in dataset:
+  # Set the volume name for finance dataset
+  vol_name = "volume_sec_filings"
+  # Define the symbols for finance dataset
+  symbols = {"AAPL", "TSLA"}
+  ## Additional Symbols below:
+             #, "AMZN", "META", "NFLX", "GOOG", "MSFT", "ADP", "FANG", "HOOD", "INTU", "MRNA", "MRVL", "OKTA", "PYPL", "VRSK"}
+
+  # Define the files pattern for finance dataset
+  files_pattern = f"/{{{','.join(symbols)}}}*.pdf"
+else:
+  # Set the volume name for databricks documentation dataset
+  vol_name = "volume_databricks_documentation"
+  # Define the files pattern for databricks documentation dataset
+  files_pattern = "*.pdf"
+
+# Extract the table prefix from the volume name
+tab_prefix = vol_name.split("volume_")[1]
+
+# Create the volume if it doesn't exist
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {vol_name}")
+
+
+# COMMAND ----------
+
 # DBTITLE 1,Use Volumes to store non-tabular data and govern Access 
-spark.sql("CREATE VOLUME IF NOT EXISTS volume_databricks_documentation")
 # List our raw PDF docs
-volume_folder =  f"/Volumes/{catalog}/{dbName}/volume_databricks_documentation"
+volume_folder =  f"/Volumes/{catalog}/{dbName}/{vol_name}"
 # Let's upload some pdf files to our volume as example
-upload_pdfs_to_volume(volume_folder+"/databricks-pdf")
+upload_pdfs_to_volume(volume_folder+"/pdfs",dataset)
 
 # COMMAND ----------
 
 # DBTITLE 1,List of pdf files
-display(dbutils.fs.ls(volume_folder+"/databricks-pdf"))
+display(dbutils.fs.ls(volume_folder+"/pdfs"))
 
 # COMMAND ----------
 
 # DBTITLE 1,Ingesting PDF files as binary format using Databricks cloudFiles (Autoloader)
+
+
 # Reading the PDF files in an incremental fashion
 df = (
     spark.readStream.format("cloudFiles")
     .option("cloudFiles.format", "BINARYFILE")
     .option("pathGlobFilter", "*.pdf")
-    .load("dbfs:" + volume_folder + "/databricks-pdf")
+    .load(f"dbfs:{volume_folder}/pdfs/{files_pattern}")
 )
 
 # Write the data as a Delta table
 (
     df.writeStream.trigger(availableNow=True)
-    .option("checkpointLocation", f"dbfs:{volume_folder}/checkpoints/raw_docs")
-    .table("pdf_raw")
+    .option("checkpointLocation", f"dbfs:{volume_folder}/checkpoints/{tab_prefix}_raw")
+    .table(tab_prefix+"_raw")
     .awaitTermination()
 )
 
 # COMMAND ----------
 
 # DBTITLE 1,Quick glance at the data; look at the column content 
-# MAGIC %sql SELECT * FROM pdf_raw LIMIT 2
+# Display the first 2 records from the {tab_prefix}_raw table
+display(spark.sql(f"SELECT * FROM {tab_prefix}_raw limit 2"))
 
 # COMMAND ----------
 
@@ -209,7 +267,7 @@ def extract_doc_text(x : bytes) -> str:
 
 # COMMAND ----------
 
-# DBTITLE 1,Trying our text extraction function with a single pdf file
+# DBTITLE 1,Trying our text extraction function with a single pdf file- Test Function
 import io
 import re
 with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main/llm/databricks-pdf-documentation/Databricks-Customer-360-ebook-Final.pdf?raw=true') as pdf:
@@ -251,6 +309,40 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 
 # COMMAND ----------
 
+# DBTITLE 1,Binary Content --> Textual Chunks 
+table_name = tab_prefix+"_chunked_pdfs"
+
+
+#Note that we need to enable Change Data Feed on the table to create the index
+spark.sql(f"CREATE TABLE IF NOT EXISTS {table_name}(\
+  chunk_id BIGINT GENERATED BY DEFAULT AS IDENTITY,\
+  path STRING,\
+  content_chunk STRING\
+) TBLPROPERTIES (delta.enableChangeDataFeed = true)" )
+
+
+# COMMAND ----------
+
+
+
+(spark.readStream.table(tab_prefix+'_raw')
+      .withColumn("content", F.explode(read_as_chunk("content")))
+      .selectExpr('path', 'content as content_chunk')
+  .writeStream
+    .trigger(availableNow=True)
+    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/{tab_prefix}_chunked_pdfs')
+    .table(table_name).awaitTermination())
+
+# COMMAND ----------
+
+display(spark.sql(f"select * from {table_name} limit 10"))
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
 # MAGIC %md-sandbox
 # MAGIC
 # MAGIC
@@ -265,24 +357,141 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 # MAGIC
 # MAGIC Databricks provide multiple types of vector search indexes:
 # MAGIC
-# MAGIC - **Managed embeddings**: you provide a text column and endpoint name and Databricks synchronizes the index with your Delta table 
-# MAGIC - **Self Managed embeddings**: you compute the embeddings and save them as a field of your Delta Table, Databricks will then synchronize the index
+# MAGIC - **Managed embeddings**: you provide a text column and endpoint name and Databricks synchronizes the index and embeddings with your Delta table. You can also choose to writ back the embeddings to a Delta table. This is highly recommended for text-based embeddings as it is not only simple but also sync all the changes from the source to embeddings and indexes automatically.
+# MAGIC - **Self Managed embeddings**: you compute the embeddings and save them as a field of your Delta Table, Databricks will then synchronize the index. This is recommended if you have pre-existing embeddings and you only need to create/sync indexes automatically. This is also recommended if you are using any non-text data such as images and embeddings are created already.
 # MAGIC - **Direct index**: when you want to use and update the index without having a Delta Table. The user is responsible for updating this table using the REST API or the Python SDK. This type of index cannot be created using the UI. You must use the REST API or the SDK.
 # MAGIC
 # MAGIC In this workshop, we will show you how to setup a **Self-managed Embeddings** index. 
-# MAGIC
-# MAGIC To do so, we will have to first compute the embeddings of our chunks and save them as a Delta Lake table field as `array&ltfloat&gt`
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC
-# MAGIC **To cover the different  flavors of Databricks Vector Search Index, we will use Self-Managed embeddings but we will also briefly touch on Managed embeddings through the UI.**
+# MAGIC **To cover the different  flavors of Databricks Vector Search Index, we will use Managed embeddings (Via UI and SDK). There is also an example for the Self-Managed embeddings at the end.**
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC
+# MAGIC There are two components of Databricks Vector Search:<br>
+# MAGIC <br>
+# MAGIC
+# MAGIC * Compute called **`Vector Search endpoint`**, this is used to handle all aspects of VS including index building, index serving, index storage.
+# MAGIC For the purpose of the workshop, the endpoint has been created already for you. If you are looking to create your own, please use the below code:
+# MAGIC
+# MAGIC ```
+# MAGIC from databricks.vector_search.client import VectorSearchClient
+# MAGIC vsc = VectorSearchClient()
+# MAGIC
+# MAGIC if not endpoint_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME):
+# MAGIC     vsc.create_endpoint(name=VECTOR_SEARCH_ENDPOINT_NAME, endpoint_type="STANDARD")
+# MAGIC
+# MAGIC wait_for_vs_endpoint_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME)
+# MAGIC print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
+# MAGIC ```
+# MAGIC <br>
+# MAGIC
+# MAGIC * **Vector Search Indexes**: These are the computed indexes.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create the Managed vector search 
+from databricks.sdk import WorkspaceClient
+import databricks.sdk.service.catalog as c
+
+from databricks.vector_search.client import VectorSearchClient
+vsc = VectorSearchClient()
+
+#The table we'd like to index
+source_table_fullname = f"{catalog}.{dbName}.{table_name}"
+
+# Where we want to store our index
+vs_index_fullname = f"{catalog}.{dbName}.{tab_prefix}_managed_vs_index"
+
+if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
+  print(f"\nCreating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}... This will take a few moments...")
+
+  vsc.create_delta_sync_index_and_wait(
+    endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
+    source_table_name=source_table_fullname, 
+    index_name=vs_index_fullname,
+    pipeline_type='TRIGGERED',
+    primary_key="chunk_id",
+    embedding_source_column="content_chunk", #providing the text column directly 
+    embedding_model_endpoint_name="databricks-bge-large-en",  ## your embeddings model
+    sync_computed_embeddings=True ## this will create a new Delta table that has the embeddings just been calculated
+    )
+  
+  index = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
+  index_path = index.describe().get("status").get("message").split("status: ")[1]
+  print(f"\nVS index created and check the status here: {index_path}")
+else:
+  #Trigger a sync to update our vs content with the new data saved in the table
+  index = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
+  if index.describe().get("status").get("detailed_state")== "ONLINE_NO_PENDING_UPDATE":
+    index.sync()
+    print(f"\nSyncing index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}... This might take a few moments...")
+  else:
+    print("\n Unable to sync as index is not ready to be synced yet...")
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC ## Searching for similar content
+# MAGIC
+# MAGIC That's all we have to do. Databricks will automatically capture and synchronize new entries in your Delta Lake Table.
+# MAGIC
+# MAGIC Note that depending on your dataset size and model size, index creation can take a few seconds to start and index your embeddings.
+# MAGIC
+# MAGIC Let's give it a try and search for similar content.
+# MAGIC
+# MAGIC *Note: `similarity_search` also supports a filters parameter. This is useful to add a security layer to your RAG system: you can filter out some sensitive content based on who is doing the call (for example filter on a specific department based on the user preference).*
+
+# COMMAND ----------
+
+
+if "Fin" in dataset:
+  question = "Market segment for Apple?"
+else:
+  question = "Databricks cost and performance metric?"
+
+index = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME,vs_index_fullname)
+
+results = index.similarity_search(
+  query_text = question,
+  columns=["path", "content_chunk"],
+  num_results=2)
+
+results
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC ## Next step: Deploy our chatbot model with RAG
+# MAGIC
+# MAGIC We've seen how Databricks Lakehouse AI makes it easy to ingest and prepare your documents, and deploy a Self Managed Vector Search index on top of it with just a few lines of code and configuration.
+# MAGIC
+# MAGIC This simplifies and accelerates your data projects so that you can focus on the next step: creating your realtime chatbot endpoint with well-crafted prompt augmentation.
+# MAGIC
+# MAGIC Open the [02a- SEC chatbot- Context-Chain-Agents-Deploy]($./02a- SEC chatbot- Context-Chain-Agents-Deploy) notebook to create and deploy a chatbot endpoint for Finance Dataset
+# MAGIC
+# MAGIC Open the [02B-Context-Chain-Agents-Deploy <Databricks Assistant>]($./02B-Context-Chain-Agents-Deploy <Databricks Assistant>) notebook to create and deploy a chatbot endpoint for Finance Dataset
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC
+# MAGIC ## Additional Content Below as take-away
+# MAGIC
+# MAGIC As explained above, Databricks has multiple flavors of Vector Search. We used the Managed indexes today where both the indexes and embeddings are created and synchronized by Databricks. Instead, if you have pre-existing embeddings that you want to use and only want to create indexes then you can choose *self-managed* delta sync version instead. Below is an example, using SDK. You can also create the same using the UI. 
+# MAGIC
+# MAGIC For this example, we will use [`BGE` embeddings Foundation Model](/ml/endpoints/databricks-bge-large-en)
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ## Introducing Databricks BGE Embeddings Foundation Model endpoints
+# MAGIC ### Introducing Databricks BGE Embeddings Foundation Model endpoints
 # MAGIC
 # MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-pdf-self-managed-4.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
 # MAGIC
@@ -295,7 +504,7 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 # MAGIC
 # MAGIC Open the [Model Serving Endpoint page](/ml/endpoints) to explore and try the foundation models.
 # MAGIC
-# MAGIC For this workshop, we will use the foundation model `BGE` (embeddings) and `llama2-70B` (chat). <br/><br/>
+# MAGIC For this workshop, we will use the foundation model [`BGE` embeddings Foundation Model](/ml/endpoints/databricks-bge-large-en) and `llama2-70B` (chat). <br/><br/>
 # MAGIC
 # MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/databricks-foundation-models.png?raw=true" width="600px" >
 
@@ -303,17 +512,12 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 
 # DBTITLE 1,Important!
 # MAGIC %md
+# MAGIC ### This is self-managed example for Vector Search Using SDK
 # MAGIC
 # MAGIC Please note that the steps below for using embedding endpoint is only required if you want to compute and manage your own embeddings and you will use *self-managed embeddings* while creating vector indexes on Databricks. 
 # MAGIC
-
-# COMMAND ----------
-
-import mlflow
-from mlflow.tracking import MlflowClient
-
-experiment_name = "/Users/sonali.guleria@databricks.com/SonaliExperimentLLM"
-mlflow.set_experiment(experiment_name)
+# MAGIC To do so, we will have to first compute the embeddings of our chunks and save them as a Delta Lake table field as `array&ltfloat&gt`
+# MAGIC
 
 # COMMAND ----------
 
@@ -329,15 +533,20 @@ pprint(embeddings)
 
 # COMMAND ----------
 
-# DBTITLE 1,Create the final databricks_pdf_documentation table containing chunks and embeddings
-# MAGIC %sql
-# MAGIC --Note that we need to enable Change Data Feed on the table to create the index
-# MAGIC CREATE TABLE IF NOT EXISTS databricks_pdf_documentation (
-# MAGIC   id BIGINT GENERATED BY DEFAULT AS IDENTITY,
-# MAGIC   url STRING,
-# MAGIC   content STRING,
-# MAGIC   embedding ARRAY <FLOAT>
-# MAGIC ) TBLPROPERTIES (delta.enableChangeDataFeed = true); 
+# DBTITLE 1,Create the final databricks_pdf_documentation table containing chunks
+table_name = tab_prefix+"_w_embeddings"
+
+#Note that we need to enable Change Data Feed on the table to create the index
+spark.sql(f"CREATE TABLE IF NOT EXISTS {table_name}(\
+  id BIGINT GENERATED BY DEFAULT AS IDENTITY,\
+  path STRING,\
+  content_chunks STRING,\
+  embedding ARRAY <FLOAT>\
+) TBLPROPERTIES (delta.enableChangeDataFeed = true)" )
+
+# COMMAND ----------
+
+table_name
 
 # COMMAND ----------
 
@@ -372,29 +581,18 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
-(spark.readStream.table('pdf_raw')
+(spark.readStream.table(tab_prefix+'_raw')
       .withColumn("content", F.explode(read_as_chunk("content")))
       .withColumn("embedding", get_embedding("content"))
-      .selectExpr('path as url', 'content', 'embedding')
+      .selectExpr('path', 'content as content_chunks', 'embedding')
   .writeStream
     .trigger(availableNow=True)
-    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk')
-    .table('databricks_pdf_documentation').awaitTermination())
-
-#Let's also add our documentation web page from the simple demo (make sure you run the quickstart demo first)
-if table_exists(f'{catalog}.{dbName}.databricks_documentation'):
-  (spark.readStream.table('databricks_documentation')
-      .withColumn('embedding', get_embedding("content"))
-      .select('url', 'content', 'embedding')
-  .writeStream
-    .trigger(availableNow=True)
-    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/docs_chunks')
-    .table('databricks_pdf_documentation').awaitTermination())
+    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_embeddings')
+    .table(table_name).awaitTermination())
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC SELECT * FROM databricks_pdf_documentation WHERE url like '%.pdf' limit 10
+display(spark.sql(f"SELECT * from {table_name} limit 10"))
 
 # COMMAND ----------
 
@@ -417,7 +615,7 @@ if table_exists(f'{catalog}.{dbName}.databricks_documentation'):
 # MAGIC
 # MAGIC
 # MAGIC
-# MAGIC For this workshop, we have already created Vector Search endpoints for you to use. **Please ensure** you are choosing one of the *vector index endpoint from the list provided by the instructor.*
+# MAGIC For this workshop, we have already created Vector Search endpoints for you to use. **Please ensure** you are **choosing** one of the *vector index endpoint from the **list** provided by the **instructor**.*
 # MAGIC
 # MAGIC
 # MAGIC There are several ways to create a vector Search endpoint. 
@@ -443,13 +641,14 @@ import databricks.sdk.service.catalog as c
 from databricks.vector_search.client import VectorSearchClient
 vsc = VectorSearchClient()
 
+
 #The table we'd like to index
-source_table_fullname = f"{catalog}.{dbName}.databricks_pdf_documentation"
+source_table_fullname = f"{catalog}.{dbName}.{table_name}"
 # Where we want to store our index
-vs_index_fullname = f"{catalog}.{dbName}.databricks_pdf_documentation_self_managed_vs_index"
+vs_index_fullname = f"{catalog}.{dbName}.{tab_prefix}_self_managed_vs_index"
 
 if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
-  print(f"Creating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
+  print(f"\nCreating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}... This will take a few moments...")
   vsc.create_delta_sync_index(
     endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
     index_name=vs_index_fullname,
@@ -476,38 +675,14 @@ wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
 # COMMAND ----------
 
-# MAGIC %md 
-# MAGIC ## Searching for similar content
-# MAGIC
-# MAGIC That's all we have to do. Databricks will automatically capture and synchronize new entries in your Delta Lake Table.
-# MAGIC
-# MAGIC Note that depending on your dataset size and model size, index creation can take a few seconds to start and index your embeddings.
-# MAGIC
-# MAGIC Let's give it a try and search for similar content.
-# MAGIC
-# MAGIC *Note: `similarity_search` also supports a filters parameter. This is useful to add a security layer to your RAG system: you can filter out some sensitive content based on who is doing the call (for example filter on a specific department based on the user preference).*
-
-# COMMAND ----------
-
-question = "How can I track billing usage on my workspaces?"
+question = "What is the data about?"
 
 response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": [question]})
 embeddings = [e['embedding'] for e in response.data]
 
 results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
   query_vector=embeddings[0],
-  columns=["url", "content"],
+  columns=["path", "content_chunks"],
   num_results=1)
 docs = results.get('result', {}).get('data_array', [])
 pprint(docs)
-
-# COMMAND ----------
-
-# MAGIC %md 
-# MAGIC ## Next step: Deploy our chatbot model with RAG
-# MAGIC
-# MAGIC We've seen how Databricks Lakehouse AI makes it easy to ingest and prepare your documents, and deploy a Self Managed Vector Search index on top of it with just a few lines of code and configuration.
-# MAGIC
-# MAGIC This simplifies and accelerates your data projects so that you can focus on the next step: creating your realtime chatbot endpoint with well-crafted prompt augmentation.
-# MAGIC
-# MAGIC Open the [02-Context-Chain-Agents]($./02-Context-Chain-Agents) notebook to create and deploy a chatbot endpoint.
