@@ -185,9 +185,9 @@ display(spark.sql(f"SELECT * FROM {tab_prefix}_raw limit 2"))
 # MAGIC * 1:1
 # MAGIC * 1:N
 # MAGIC * many more
+# MAGIC     - Semantic Chunking: Identify semantically coherent segments within the text. It aims to preserve the meaning and context of the content by breaking it into chunks based on the flow of ideas or topics.
 # MAGIC     - Sentence Segmentation: Breaking long paragraphs or documents into individual sentences.
 # MAGIC     - Paragraph Segmentation: Breaking longer texts into smaller paragraphs or sections.
-# MAGIC     - Tokenization: Breaking text into individual tokens or words.
 # MAGIC     - Topic Modeling: Identifying key topics or themes within a large text and segmenting based on these themes.
 # MAGIC     - Attention Mechanisms: Focusing attention on relevant parts of the input text while processing.
 # MAGIC
