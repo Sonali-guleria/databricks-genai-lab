@@ -43,7 +43,7 @@ dbutils.widgets.removeAll()
 dbutils.widgets.text("dbName", "", "Database Name")
 dbutils.widgets.text("VECTOR_SEARCH_ENDPOINT_NAME", "", "Vector Search Endpoint Name")
 dbutils.widgets.text("catalog", "", "Catalog")
-dbutils.widgets.dropdown("reset_all_data", "true", ["true"], "Reset Data")
+dbutils.widgets.dropdown("reset_all_data", "false", ["false"], "Reset Data")
 dbutils.widgets.dropdown("dataset", "Finance-SecFilings", ["Finance-SecFilings"],"Dataset")
 
 # Get the widget values
